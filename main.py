@@ -1,153 +1,221 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Mar 10 18:03:24 2026
+Created on Tue Mar 17 17:31:51 2026
 
 @author: q88546sh
 
-Thus the second iteration of our Boids Program, using a quiver plot to represent our Boids
 
-Documentation of modules and links to sources used heavily to be listed below:
-    
-https://numpy.org/doc/
+Thus the Third and (Hopefully) final iteration of our Boids Model.
 
-To get animations to render properly navigate in spyder to
-tools -> preferences -> graphics , then set the back end to Qt5.
-Restart the kernel and the animation will open in another window upon running the program.
-
-https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.quiver.html
 http://www.kfish.org/boids/pseudocode.html
-https://github-pages.ucl.ac.uk/rsd-engineeringcourse/ch02data/084Boids.html
+https://numpy.org/doc/
+https://agentpy.readthedocs.io/en/latest/guide.html
+
+please work
+
 """
 
 # Packages
 
+import agentpy as ap
 import numpy as np
-from matplotlib import pyplot as plt, animation # to visualise we'll use FuncAnimation which generates an initial plot then updates its data for each frame
-from scipy.spatial import KDTree
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+
+def norm(v):
+    norm = np.linalg.norm(v)
+    if norm == 0:
+        return v
+    return v / norm
+
+class Boid(ap.Agent):
+    # this all looks scary but TLDR we're initialising a type of object with particular rules that govern how agentpy will update it
+    def setup(self):
+        self.velocity = norm(self.model.nprandom.random(self.p.ndim) - 0.5) # generate a vector of length self.p.ndim (2 or 3D) with entries in [0,1),
+        # then subtract 0.5 -  shifting the range to [-0.5,0.5) ;  the vector points in a random direction about the origin - then normalise
+    def setup_pos(self,space):
+        self.space = space # reminds agentpy to attach the agent to the model's 'space' object
+        self.neighbors = space.neighbors # assigns the method space.neighbors to the object
+        self.pos = space.positions[self]
+    def update_velocity(self):
+        pos = self.pos #  creates a local reference to the agent's pos vector
+        ndim = self.p.ndim # pulls ndim into another local variable (these local references are optimisations; they avoid calling self.pos when looping over many timesteps)
+        # Cohesion
+        nbs = self.neighbors(self,distance=self.p.visual_range)
+        nbs_len = len(nbs)
+        nbs_pos_array = np.array(nbs.pos)
+        nbs_vec_array = np.array(nbs.velocity)
+        if nbs_len >0:
+            centre = np.sum(nbs_pos_array,0)/ nbs_len
+            v1 = (centre-pos)*self.p.cohesion_strength
+        else:
+            v1 = np.zeros(ndim)
+        # Separation
+        v2 = np.zeros(ndim)
+        for nb in self.neighbors(self,distance=self.p.protected_radius):
+            v2 -= nb.pos - pos
+        v2 *= self.p.separation_strength
+        # Alignment
+        if nbs_len > 0:
+            average_v = np.sum(nbs_vec_array, 0) / nbs_len
+            v3 = (average_v - self.velocity) * self.p.alignment_strength
+        else:
+            v3 = np.zeros(ndim)
+        # Borders - I'm wondering about changing this to some kind of reward function
+        v4 = np.zeros(ndim)
+        d = self.p.border_distance # again, unpack parameters to local variables
+        s = self.p.border_strength
+        for i in range(ndim):
+            if pos[i] < d:
+                v4[i] +=s
+            elif pos[i] > self.space.shape[i] - d:
+                v4[i] -= s
+        # Update velocity
+        self.velocity += v1 + v2 + v3 + v4
+        self.velocity = norm(self.velocity)
+    def update_position(self):
+        self.space.move_by(self,self.velocity)
+        
+class BoidsModel(ap.Model):
+    def setup(self):
+        # initialise the agents and the model's other key objects
+        self.space  = ap.Space(self,shape = [self.p.size]*self.p.ndim)
+        self.agents = ap.AgentList(self,self.p.population, Boid)
+        self.space.add_agents(self.agents, random = True)
+        self.agents.setup_pos(self.space)
+    def step(self):
+        # characterises what happens in each somulation step
+        self.agents.update_velocity()
+        self.agents.update_position()
+        
+# Animation / Visualisation        
+def animation_plot_single(m,ax):
+    # takes args m := model, ax := parameter dictionary
+    pop = m.p.population
+    ndim = m.p.ndim #store ndim as a local variable
+    ax.clear()
+    ax.set_title(f"plenty ({pop}) of fish in the sea {ndim}D, t={m.t}")
+    pos = m.space.positions.values()
+    pos = np.array(list(m.space.positions.values())).T # transform
+    ax.scatter(*pos, s= 5, c = 'black')
+    ax.set_xlim(0,m.p.size)
+    ax.set_ylim(0,m.p.size)
+    if ndim == 3:
+        ax.set_zlim(0,m.p.size)
+    #ax.set_axis_off()
+
+def animate_model(model, parameters):
+    m = model(parameters)
+    m.run(1)
+
+    fig = plt.figure(figsize=(7,7))
+    ax = fig.add_subplot(111, projection='3d' if parameters['ndim']==3 else None)
+
+    def update(frame):
+        m.step()
+        animation_plot_single(m, ax)
+
+    anim = FuncAnimation(fig, update, frames=parameters['steps'], interval=10)
+    plt.show()
+    return anim
+
+def animate_model2(model, parameters):
+    # a second method. hopefully better fps
+    m = model(parameters)
+    m.run(1)
+
+    fig = plt.figure(figsize=(7,7))
+    ax = fig.add_subplot(111, projection='3d' if parameters['ndim']==3 else None)
+
+    # initialise scatter
+    pos = np.array(list(m.space.positions.values())).T
+    scat = ax.scatter(*pos, s=5, c='black')
+    # generate axes
+    ax.set_xlim(0, m.p.size)
+    ax.set_ylim(0, m.p.size)
+    if parameters['ndim'] == 3:
+        ax.set_zlim(0, m.p.size)
+
+    def update(frame):
+        # by updating the axes and not calling axclear each frame it should in theory allow us to get more frames
+        m.step()
+        pos = np.array(list(m.space.positions.values())).T
+        scat._offsets3d = (pos[0], pos[1], pos[2]) if parameters['ndim']==3 else pos
+        ax.set_title(f"plenty ({m.p.population}) of fish in the sea {parameters['ndim']}D")
+
+    anim = FuncAnimation(fig, update, frames=parameters['steps'], interval=10)
+    plt.show()
+    return anim
+
+def animate_model_quiver(model, parameters):
+    m = model(parameters)
+    m.run(1)
+
+    fig = plt.figure(figsize=(7,7))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # --- initial positions and velocities ---
+    pos = np.array(list(m.space.positions.values()))
+    vel = np.array([a.velocity for a in m.agents])
+
+    # --- create initial quiver object ---
+    Q = ax.quiver(
+        pos[:,0], pos[:,1], pos[:,2],
+        vel[:,0], vel[:,1], vel[:,2],
+        length=1.0, normalize=True, color='black'
+    )
+
+    ax.set_xlim(0, m.p.size)
+    ax.set_ylim(0, m.p.size)
+    ax.set_zlim(0, m.p.size)
+
+    def update(frame):
+        m.step()
+
+        pos = np.array(list(m.space.positions.values()))
+        vel = np.array([a.velocity for a in m.agents])
+
+        # Update quiver data (3D version)
+        Q.set_segments([])  # clear old segments
+        Q._segments3d = [
+            [[x, y, z], [x+u, y+v, z+w]]
+            for (x,y,z), (u,v,w) in zip(pos, vel)
+        ]
+
+        ax.set_title(f"Boids (quiver) {m.p.ndim}D")
+
+    anim = FuncAnimation(fig, update, frames=parameters['steps'], interval=10)
+    plt.show()
+    return anim
 
 
 # Parameters
 
-parameters2D = {
-    'size': 50,
-    'seed': 17,
-    'steps': 200,
-    'ndim': 2,
-    'population': 200,
-    'inner_radius': 3,
-    'outer_radius': 10,
+
+parameters3D = {
+    'size': 100,
+    'seed': 123,
+    'steps': 500,
+    'ndim': 3,
+    'population': 500,
+    'protected_radius': 3,
+    'visual_range': 10,
     'border_distance': 10,
     'cohesion_strength': 0.005,
-    'seperation_strength': 0.1,
+    'separation_strength': 0.1,
     'alignment_strength': 0.3,
     'border_strength': 0.5
 }
+# NB Check these names and values pass a sanity check later
+
+# this HAS to be stored to an object either here (anim) or inside animate_model - else matplotlib garbage-collects the animation
+#anim = animate_model(BoidsModel, parameters3D) # the least efficient version it seems
+#anim = animate_model2(BoidsModel,parameters3D) # uncomment/ run this for pointlike boids
+anim2 = animate_model_quiver(BoidsModel, parameters3D) # run this for a quiver plot (3d only)
 
 
+# Parameter Sweeps and Data Analysis (Seaborn/Pandas)
 
-# Initialise the System
-
-rng = np.random.default_rng(seed=17) # set seed to avoid issues with reproducibility
-
-def initialise_boid_states(rng, num_boids = 200, min_position = (0,0), max_position = (2000,2000), min_velocity = (-10,-10), max_velocity = (10,10)):
-    positions = rng.uniform(low = min_position, high = max_position, size = (num_boids,2))
-    velocities = rng.uniform(low = min_velocity, high = max_velocity, size = (num_boids,2))
-    return positions, velocities
-
-positions, velocities = initialise_boid_states(rng)
-
-def get_unit_vector(vector):
-    # This can absolutely be optimised by using an alpha-max beta-min algorithm
-    return vector / (vector**2).sum(-1)[...,np.newaxis]**0.5
-    
-def plot_boids(positions, velocities, figsize= (8,8), xlim = (0,2000), ylim = (0,2000)):
-    fig, ax = plt.subplots(figsize = (8,8))
-    ax.set(xlim=xlim,ylim=ylim, xlabel = "x coordinate",ylabel = "y coordinate")
-    velocity_unit_vectors =get_unit_vector(velocities)
-    arrows = ax.quiver(
-        positions[:,0], # horizontal coordinates for arrow origins
-        positions[:,1], # vertical coordinates for arrow origins
-        velocity_unit_vectors[:,0], # horizontal component of arrow vector
-        velocity_unit_vectors[:,1], # vertical component of arrow vector
-        scale = 50, # arrow size, can fiddle around with visual fixes later
-        color = 'k', # again TBD
-        angles = 'xy', # specifies arrow directions
-        pivot = 'middle' # sets the middle of the arrows at our specified origin coords
-        )
-    return fig, ax, arrows
-
-#fig, ax, arrows = plot_boids(positions, velocities)
-
-# Define Model Dynamics
-
-def simulate_timestep(positions,velocities,forces,timestep):
-    positions += timestep*velocities
-    velocities += timestep* sum(force(positions,velocities) for force in forces)
-
-def cohesion_force(positions, velocities, cohesion_strength = 0.001):
-    # Should later be updated to include only boids within the visual range, not globally
-    return cohesion_strength * (positions.mean(axis=0)[np.newaxis]-positions)
-
-def cohesion_force2(positions, velocities, cohesion_strength=0.025, visual_range=100):
-    tree = KDTree(positions)
-    forces = np.zeros_like(positions)
-    for i, pos in enumerate(positions):
-        idxs = tree.query_ball_point(pos, visual_range)
-        idxs = [j for j in idxs if j != i]  # remove self
-        if len(idxs) == 0:
-            continue
-        avg_pos = positions[idxs].mean(axis=0)
-        forces[i] = cohesion_strength * (avg_pos - pos)
-    return forces      
-
-def separation_force(positions, velocities, separation_strength=0.05, protected_range = 30 ):
-    displacements = positions[np.newaxis]- positions[:,np.newaxis] # This method is horrendously computationally expensive, replace with a KDTree at first convenience
-    are_close = (displacements**2).sum(-1)**0.5 <= protected_range # condition for two boids to be within separation distance
-    return separation_strength* np.where(are_close[...,None], displacements,0).sum(0)
-
-def alignment_force(positions,velocities, alignment_strength = 0.05, visual_range = 100):
-    displacements = positions[np.newaxis] - positions[:, np.newaxis]
-    velocity_differences = velocities[np.newaxis] - velocities[:, np.newaxis]
-    are_close = (displacements**2).sum(-1)**0.5 <= visual_range
-    return -alignment_strength* np.where(are_close[...,None], velocity_differences, 0).mean(0)
-
-def border_avoidance(positions, velocities, border_strength = 0.5, border_distance = 100, ndim = 2):
-    bforce = np.zeros_like(positions)
-    for i in range(ndim):
-        if positions[:,i] < border_distance:
-            bforce += border_strength
-        elif positions[:,i] > 2000 - border_distance: # I know this is super inelegant, bear with me
-            bforce -= border_strength
-    return bforce
-
-def border_avoidance2(positions, velocities, border_strength = 0.5, border_distance = 100, maximum = 2000, ndim = 2):
-    combined_forces = np.zeros_like(velocities)
-    for i in range(ndim):
-        coordinate = positions[:,i]
-        too_small = coordinate <= border_distance # Conditions for detecting when the boid is within the margin of 250 px
-        too_large = coordinate >= maximum - border_distance
-        dist_small = border_distance - coordinate
-        dist_large = coordinate - (maximum - border_distance)
-        # Apply the forces
-        small_forces = border_strength * np.where(too_small, dist_small, 0)  # Act on boids with a coordinate smaller than the 'lower' margin
-        large_forces = -border_strength * np.where(too_large,dist_large, 0) # Act on boids with a coordinate larger than the 'higher' margin
-        combined_forces[:,i] = small_forces + large_forces
-    return combined_forces
-
-# Generate an Animation
-
-def animate_flock(positions,velocities, forces = (),timestep = 1, num_steps = 100):
-    fig, ax, arrows = plot_boids(positions,velocities) # Import initialised matplotlib objects
-    def update_frame(frame_index):
-        simulate_timestep(positions,velocities,forces,timestep)
-        velocity_unit_vectors = get_unit_vector(velocities)
-        arrows.set_offsets(positions)
-        arrows.set_UVC(velocity_unit_vectors[:,0],velocity_unit_vectors[:,1])
-        return [arrows]
-    # Close the matplotlib figure object to avoid displaying the static figure
-    #plt.close(fig)
-    return animation.FuncAnimation(fig, update_frame, num_steps, interval = 50)
-
-ani = animate_flock(positions, velocities, [cohesion_force2, separation_force, alignment_force, border_avoidance2])
-plt.show()
-
+# see https://agentpy.readthedocs.io/en/latest/agentpy_forest_fire.html
+# tutorial on setting up a sample and running a parameter sweep
