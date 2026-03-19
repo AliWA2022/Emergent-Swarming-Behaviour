@@ -78,10 +78,43 @@ class Boid(ap.Agent):
                 v4[i] +=s
             elif pos[i] > self.space.shape[i] - d:
                 v4[i] -= s
+        # -----------------------------------------------------------------
+        # Predator avoidance  (v5)
+        # "Tendency away from a particular place" – each boid flees from
+        # the nearest predator if it is within predator_fear_radius.
+        # -----------------------------------------------------------------
+        v5 = np.zeros(ndim)
+        predators = self.model.predators  # AgentList (may be empty)
+        if len(predators) > 0:
+            # Compute distance to every predator and pick the nearest one
+            pred_positions = np.array(
+                [self.space.positions[p] for p in predators
+                 if p in self.space.positions]
+            )
+            if len(pred_positions) > 0:
+                diffs = pred_positions - pos          # shape (n_pred, ndim)
+                dists = np.linalg.norm(diffs, axis=1) # shape (n_pred,)
+                nearest_idx = int(np.argmin(dists))
+                nearest_dist = dists[nearest_idx]
+
+                if nearest_dist < self.p.predator_fear_radius:
+                    # Vector pointing FROM predator TO boid (escape direction)
+                    escape_vec = pos - pred_positions[nearest_idx]
+                    escape_norm = np.linalg.norm(escape_vec)
+                    if escape_norm > 0:                       # guard: same-position edge case
+                        escape_vec = escape_vec / escape_norm
+                    else:
+                        # Predator sits exactly on the boid – flee in a
+                        # random direction so we don't get a zero vector
+                        escape_vec = norm(
+                            self.model.nprandom.random(ndim) - 0.5
+                        )
+                    v5 = escape_vec * self.p.predator_avoidance_strength
+
         # Two-stage velocity update: compute next_velocity now, apply later.
         # This prevents asynchronous update artefacts where boids updated earlier
         # in the loop influence the velocity computation of boids updated later.
-        self.next_velocity = norm(self.velocity + v1 + v2 + v3 + v4)
+        self.next_velocity = norm(self.velocity + v1 + v2 + v3 + v4 + v5)
 
     def apply_velocity(self):
         """Stage 2: assign the pre-computed next_velocity to self.velocity."""
@@ -363,11 +396,14 @@ parameters3D = {
     'alignment_strength': 0.3,
     'border_strength': 0.5,
     # ---- Predator parameters ----
-    'n_predators': 1,                # number of predators in the simulation
+    'n_predators': 3,                # number of predators in the simulation
     'predator_speed': 1.5,           # faster than boids (boid speed ~ 1.0 after norm)
     'predator_visual_range': 20,     # how far a predator can see prey
     'predator_capture_radius': 2,    # distance at which a predator eats a boid
     'predator_turn_strength': 0.3,   # how sharply predator steers toward prey
+    # ---- Boid predator-response parameters ----
+    'predator_fear_radius': 15,       # boid reacts when predator is within this range
+    'predator_avoidance_strength': 0.5, # magnitude of escape impulse per timestep
 }
 # NB Check these names and values pass a sanity check later
 
